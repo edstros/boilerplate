@@ -1,0 +1,318 @@
+
++----------------+
+|  Making the    |
+|  directories   |
+|  on one line:  |
++----------------+
+
+mkdir src src/_partials src/_styles src/js
+
++---------------------+
+|  Touching required  |
+|  files on one line: |
++---------------------+
+
+touch src/index.jade src/_partials/_layout.jade src/_partials/_header.jade src/_partials/_footer.jade src/_styles/main.scss src/_styles/_variables.scss src/_styles/_index.scss src/_styles/_layout.scss src/_styles/_header.scss src/_styles/_footer.scss src/js/main.js
+
++-------------------------------+
+|  Initialize package managers  |
+|  and follow the directions:   |
++-------------------------------+
+npm init
+bower init
+
++----------------------------------+
+|  Install jade, node-sass, babel, |
+|  http-server, bowcat, nodemon,   |
+|  jquery, foundation, lodash      |
++----------------------------------+
+
+npm install https://github.com/jadejs/jade node-sass babel http-server bowcat nodemon --save-dev
+bower install jquery foundation lodash --save-dev
+
+
++--------------+
+| Build shells |
++--------------+
+
+touch build.sh deploy.sh watch.sh
+sudo chmod +x build.sh
+chmod +x deploy.sh
+chmod +x watch.sh
+
++------------------------+
+|  Content for build.sh  |
++------------------------+
+
+#!/bin/sh
+
+#install dependencies
+npm install
+bower install
+
+# clean and prepare public directory
+rm -rf public
+cp -r src public
+
+# compile jade to html
+./node_modules/.bin/jade src -o public -PH
+rm -rf public/_partials
+
+# compile sass to css
+./node_modules/.bin/node-sass \
+  --output-style compressed \
+  --source-map-embed \
+  src/_styles/main.scss public/css/main.css
+
+# convert ES6 JS to ES5
+./node_modules/.bin/babel src --out-dir public -s inline
+
+# concat bower_components to public/lib
+if [ -d "bower_components" ]; then
+./node_modules/.bin/bowcat . -o public/lib -m
+fi
+
+# clean unneeded files
+rm -rf public/_styles \
+       public/*.jade \
+       public/**/*.jade \
+       public/*.scss \
+       public/**/*.scss
+
+
+
++------------------------+
+|  Content for watch.sh  |
++------------------------+
+
+#!/bin/sh
+
+#install dependencies
+npm install
+bower install
+
+# clean and prepare public directory
+rm -rf public
+cp -r src public
+
+# compile jade to html
+./node_modules/.bin/nodemon -e jade --watch src --exec "
+  ./node_modules/.bin/jade src -o public -PH
+  rm -rf src/*.html public/_partials" &
+
+# compile sass to css
+./node_modules/.bin/node-sass \
+  --output-style compressed \
+  --source-map-embed \
+  --recursive \
+  src/_styles/main.scss public/css/main.css &
+
+# convert ES6 JS to ES5
+./node_modules/.bin/babel \
+  src \
+  --out-dir public \
+  -s inline \
+  -w &
+
+# concat bower_components to public/lib
+if [ -d "bower_components" ]; then
+./node_modules/.bin/bowcat . -o public/lib -m
+fi
+
+# clean unneeded files
+rm -rf public/_styles \
+       public/*.jade \
+       public/**/*.jade \
+       public/*.scss \
+       public/**/*.scss
+
+echo "Watching for changes..."
+
+
++-------------------------+
+|  Content for deploy.sh  |
++-------------------------+
+
+#!/usr/bin/env bash
+set -o errexit #abort if any command fails
+
+deploy_directory=public
+deploy_branch=gh-pages
+
+#if no user identity is already set in the current git environment, use this:
+default_username=deploy.sh
+default_email=
+
+#repository to deploy to. must be readable and writable.
+repo=origin
+
+# Parse arg flags
+while : ; do
+  if [[ $1 = "-v" || $1 = "--verbose" ]]; then
+    verbose=true
+    shift
+  elif [[ $1 = "-s" || $1 = "--setup" ]]; then
+    setup=true
+    shift
+  elif [[ $1 = "-e" || $1 = "--allow-empty" ]]; then
+    allow_empty=true
+    shift
+  else
+    break
+  fi
+done
+
+#echo expanded commands as they are executed (for debugging)
+function enable_expanded_output {
+  if [ $verbose ]; then
+    set -o xtrace
+    set +o verbose
+  fi
+}
+
+#this is used to avoid outputting the repo URL, which may contain a secret token
+function disable_expanded_output {
+  if [ $verbose ]; then
+    set +o xtrace
+    set -o verbose
+  fi
+}
+
+enable_expanded_output
+
+function set_user_id {
+  if [[ -z `git config user.name` ]]; then
+    git config user.name "$default_username"
+  fi
+  if [[ -z `git config user.email` ]]; then
+    git config user.email "$default_email"
+  fi
+}
+
+function restore_head {
+  if [[ $previous_branch = "HEAD" ]]; then
+    #we weren't on any branch before, so just set HEAD back to the commit it was on
+    git update-ref --no-deref HEAD $commit_hash $deploy_branch
+  else
+    git symbolic-ref HEAD refs/heads/$previous_branch
+  fi
+
+  git reset --mixed
+}
+
+if ! git diff --exit-code --quiet --cached; then
+  echo Aborting due to uncommitted changes in the index >&2
+  exit 1
+fi
+
+commit_title=`git log -n 1 --format="%s" HEAD`
+commit_hash=`git log -n 1 --format="%H" HEAD`
+previous_branch=`git rev-parse --abbrev-ref HEAD`
+
+if [ $setup ]; then
+  mkdir -p "$deploy_directory"
+  git --work-tree "$deploy_directory" checkout --orphan $deploy_branch
+  git --work-tree "$deploy_directory" rm -r "*"
+  git --work-tree "$deploy_directory" add --all
+  git --work-tree "$deploy_directory" commit -m "initial publish"$'\n\n'"generated from commit $commit_hash"
+  git push $repo $deploy_branch
+  restore_head
+  exit
+fi
+
+if [ ! -d "$deploy_directory" ]; then
+  echo "Deploy directory '$deploy_directory' does not exist. Aborting." >&2
+  exit 1
+fi
+
+if [[ -z `ls -A "$deploy_directory" 2> /dev/null` && -z $allow_empty ]]; then
+  echo "Deploy directory '$deploy_directory' is empty. Aborting. If you're sure you want to deploy an empty tree, use the -e flag." >&2
+  exit 1
+fi
+
+disable_expanded_output
+git fetch --force $repo $deploy_branch:$deploy_branch
+enable_expanded_output
+
+#make deploy_branch the current branch
+git symbolic-ref HEAD refs/heads/$deploy_branch
+
+#put the previously committed contents of deploy_branch branch into the index
+git --work-tree "$deploy_directory" reset --mixed --quiet
+
+git --work-tree "$deploy_directory" add --all
+
+set +o errexit
+diff=$(git --work-tree "$deploy_directory" diff --exit-code --quiet HEAD)$?
+set -o errexit
+case $diff in
+  0) echo No changes to files in $deploy_directory. Skipping commit.;;
+  1)
+    set_user_id
+    git --work-tree "$deploy_directory" commit -m \
+      "publish: $commit_title"$'\n\n'"generated from commit $commit_hash"
+
+    disable_expanded_output
+    #--quiet is important here to avoid outputting the repo URL, which may contain a secret token
+    git push --quiet $repo $deploy_branch
+    enable_expanded_output
+    ;;
+  *)
+    echo git diff exited with code $diff. Aborting. Staying on branch $deploy_branch so you can debug. To switch back to master, use: git symbolic-ref HEAD refs/heads/master && git reset --mixed >&2
+    exit $diff
+    ;;
+esac
+
+restore_head
+
+
++---------------------+
+|  Addtional scripts  |
+|  for package.json   |
++---------------------+
+
+"scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "server": "./node_modules/.bin/hs -a localhost -p $((RANDOM + 10000)) -o",
+    "build": "./build.sh",
+    "start": "npm run build;  npm run server",
+    "deploy": "npm run build; ./deploy.sh",
+    "watch": "./watch.sh; npm run server"
+  },
+
+
+
+
++--------------+
+|  .gitignore  |
++--------------+
+
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+
+# Directory for instrumented libs generated by jscoverage/JSCover
+lib-cov
+
+# Coverage directory used by tools like istanbul
+coverage
+
+# Grunt intermediate storage (http://gruntjs.com/creating-plugins#storing-task-files)
+.grunt
+
+# node-waf configuration
+.lock-wscript
+
+# Compiled binary addons (http://nodejs.org/api/addons.html)
+build/Release
+
+# Dependency directory
+# https://www.npmjs.org/doc/misc/npm-faq.html#should-i-check-my-node_modules-folder-into-git
+node_modules
+
+
